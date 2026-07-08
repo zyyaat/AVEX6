@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	idp "avex-backend/internal/modules/identity/port"
 	"avex-backend/internal/modules/orders"
 	"avex-backend/internal/modules/orders/domain"
 	"avex-backend/internal/modules/orders/port"
@@ -55,7 +57,9 @@ func TestMain(m *testing.M) {
 		JWT:    config.JWTConfig{Secret: "test-secret-at-least-32-characters-long!!", Issuer: "avex-test", AccessTTL: 24 * time.Hour},
 		Bcrypt: config.BcryptConfig{Cost: 4},
 	}
-	testMod = orders.New(appCfg, pool, slog.Default())
+	// Create a mock JWT issuer for auth middleware.
+	mockJWT := &mockJWTIssuer{}
+	testMod = orders.New(appCfg, pool, slog.Default(), mockJWT)
 	testSvc = testMod.Service()
 
 	code := m.Run()
@@ -442,3 +446,26 @@ func TestIntegration_CancelDeliveredOrder(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// mockJWTIssuer implements idp.JWTIssuer for integration tests.
+type mockJWTIssuer struct{}
+
+func (m *mockJWTIssuer) Issue(_ context.Context, params idp.IssueJWTParams) (string, error) {
+	return "mock-token:" + params.Subject + ":" + params.Role + ":" + params.SessionID, nil
+}
+
+func (m *mockJWTIssuer) Verify(_ context.Context, token string) (*idp.JWTClaims, error) {
+	if len(token) < 12 || token[:12] != "mock-token:" {
+		return nil, fmt.Errorf("invalid token")
+	}
+	rest := token[12:]
+	parts := strings.SplitN(rest, ":", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+	return &idp.JWTClaims{
+		Subject:   parts[0],
+		Role:      parts[1],
+		SessionID: parts[2],
+	}, nil
+}

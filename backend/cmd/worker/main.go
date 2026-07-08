@@ -1,16 +1,11 @@
 // Package main is the outbox publisher worker entry point.
 //
-// The worker:
-//  1. Loads configuration (same as the server).
-//  2. Connects to PostgreSQL and Redis.
-//  3. Creates the outbox + event bus.
-//  4. Starts the publisher worker (polls outbox → publishes to Redis).
-//  5. Blocks until SIGINT / SIGTERM, then shuts down gracefully.
+// The worker processes outbox tables from ALL modules:
+//   - identity.outbox
+//   - orders.outbox
 //
-// The worker is a SEPARATE binary from the server. This allows:
-//   - Independent scaling (more workers without more API servers).
-//   - Failure isolation (worker crash doesn't affect API).
-//   - Zero-downtime deploys (restart worker while API keeps serving).
+// Each module has its own outbox table. The worker runs a publisher for
+// each module concurrently, polling the outbox and publishing events to Redis.
 package main
 
 import (
@@ -18,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,17 +30,13 @@ func main() {
 	// 1. Load config.
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
 
 	// 2. Init logger.
 	log := logger.New(cfg)
-	log.Info("starting outbox worker",
-		"app", cfg.App.Name,
-		"env", cfg.App.Env,
-		"instance", cfg.App.InstanceID,
-	)
+	log.Info("starting outbox worker", "app", cfg.App.Name, "env", cfg.App.Env)
 
 	// 3. Connect to database.
 	dbPool, err := database.Connect(ctx, cfg.Database)
@@ -64,33 +56,48 @@ func main() {
 	defer redisBus.Close()
 	log.Info("redis bus connected")
 
-	// 5. Create outbox + publisher worker.
-	identityOutbox := outbox.NewPostgresOutbox(dbPool.Pool(), outbox.Config{
-		Table:          "identity.outbox",
-		MaxRetries:     cfg.Outbox.MaxRetries,
-		RetryBaseDelay: cfg.Outbox.RetryBaseDelay,
-	})
+	// 5. Define outboxes for each module.
+	outboxes := []struct {
+		name  string
+		table string
+	}{
+		{"identity", "identity.outbox"},
+		{"orders", "orders.outbox"},
+	}
 
-	worker := outbox.NewPublisherWorker(
-		identityOutbox,
-		redisBus, // bus.Publisher (RedisBus implements both Publisher + Subscriber)
-		cfg.Outbox.PollInterval,
-		cfg.Outbox.BatchSize,
-		log,
-	)
-
-	// 6. Start worker in a goroutine.
+	// 6. Start a publisher worker for each module.
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 
-	go func() {
-		if err := worker.Run(workerCtx); err != nil {
-			log.Error("worker exited with error", "error", err)
-			workerCancel()
-		}
-	}()
+	var wg sync.WaitGroup
+	for _, ob := range outboxes {
+		obInstance := outbox.NewPostgresOutbox(dbPool.Pool(), outbox.Config{
+			Table:          ob.table,
+			MaxRetries:     cfg.Outbox.MaxRetries,
+			RetryBaseDelay: cfg.Outbox.RetryBaseDelay,
+		})
 
-	log.Info("outbox worker running",
+		worker := outbox.NewPublisherWorker(
+			obInstance,
+			redisBus,
+			cfg.Outbox.PollInterval,
+			cfg.Outbox.BatchSize,
+			log.With("module", ob.name),
+		)
+
+		wg.Add(1)
+		go func(name string, w *outbox.PublisherWorker) {
+			defer wg.Done()
+			log.Info("starting outbox publisher", "module", name)
+			if err := w.Run(workerCtx); err != nil {
+				log.Error("outbox publisher exited with error", "module", name, "error", err)
+			}
+			log.Info("outbox publisher stopped", "module", name)
+		}(ob.name, worker)
+	}
+
+	log.Info("all outbox workers running",
+		"modules", len(outboxes),
 		"poll_interval", cfg.Outbox.PollInterval,
 		"batch_size", cfg.Outbox.BatchSize,
 	)
@@ -104,10 +111,17 @@ func main() {
 	// 8. Graceful shutdown.
 	workerCancel()
 
-	// Give the worker a few seconds to finish the current batch.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	<-shutdownCtx.Done()
+	// Wait for all workers to finish (with timeout).
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
 
-	log.Info("outbox worker stopped gracefully")
+	select {
+	case <-done:
+		log.Info("all workers stopped gracefully")
+	case <-time.After(10 * time.Second):
+		log.Warn("shutdown timeout — some workers may not have finished cleanly")
+	}
 }

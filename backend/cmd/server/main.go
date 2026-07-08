@@ -61,7 +61,8 @@ func main() {
 	defer identityMod.Close()
 	log.Info("identity module wired")
 
-	ordersMod := orders.New(cfg, dbPool.Pool(), log)
+	// Orders module needs identity's JWT issuer for auth middleware.
+	ordersMod := orders.New(cfg, dbPool.Pool(), log, identityMod.JWTIssuer())
 	defer ordersMod.Close()
 	log.Info("orders module wired")
 

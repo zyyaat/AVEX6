@@ -113,6 +113,12 @@ func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Module {
 }
 
 // Service returns the identity ServicePort for cross-module calls.
+// JWTIssuer returns the identity module's JWT issuer.
+// Used by other modules (e.g. orders) for auth middleware.
+func (m *Module) JWTIssuer() port.JWTIssuer {
+	return m.jwtIssuer
+}
+
 func (m *Module) Service() port.ServicePort {
 	return m.svc
 }

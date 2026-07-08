@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	idp "avex-backend/internal/modules/identity/port"
 	"avex-backend/internal/modules/orders/events"
 	"avex-backend/internal/modules/orders/port"
 	"avex-backend/internal/modules/orders/repository/postgres"
@@ -19,13 +20,14 @@ import (
 
 // Module is the wired orders module.
 type Module struct {
-	svc    port.ServicePort
-	pool   *pgxpool.Pool
-	logger *slog.Logger
+	svc       port.ServicePort
+	pool      *pgxpool.Pool
+	logger    *slog.Logger
+	jwtIssuer idp.JWTIssuer
 }
 
 // New wires all orders dependencies and returns a ready-to-use Module.
-func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Module {
+func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger, jwtIssuer idp.JWTIssuer) *Module {
 	// Repositories
 	repos := postgres.NewRepositories()
 	repoSet := repos.RepositorySet()
@@ -51,13 +53,13 @@ func New(cfg *config.Config, pool *pgxpool.Pool, logger *slog.Logger) *Module {
 		OfferTTL: 15 * time.Second,
 	})
 
-	return &Module{svc: svc, pool: pool, logger: logger}
+	return &Module{svc: svc, pool: pool, logger: logger, jwtIssuer: jwtIssuer}
 }
 
 func (m *Module) Service() port.ServicePort { return m.svc }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	httptransport.RegisterRoutes(mux, m.svc, m.logger)
+	httptransport.RegisterRoutes(mux, m.svc, m.logger, m.jwtIssuer)
 }
 
 func (m *Module) Close() {}

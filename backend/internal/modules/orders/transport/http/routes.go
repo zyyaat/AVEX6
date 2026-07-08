@@ -5,37 +5,41 @@ import (
 	"log/slog"
 	"net/http"
 
+	idp "avex-backend/internal/modules/identity/port"
+	idhttp "avex-backend/internal/modules/identity/transport/http"
 	"avex-backend/internal/modules/orders/port"
 )
 
 // RegisterRoutes registers all orders HTTP routes on the given mux.
-func RegisterRoutes(mux *http.ServeMux, svc port.ServicePort, logger *slog.Logger) {
+func RegisterRoutes(mux *http.ServeMux, svc port.ServicePort, logger *slog.Logger, jwtIssuer idp.JWTIssuer) {
 	h := NewHandler(svc, logger)
 
-	// ===== Public =====
+	authMW := idhttp.Auth(jwtIssuer, logger)
+
+	// Public
 	mux.HandleFunc("GET /api/v1/orders/track/{orderNumber}", h.TrackOrder)
 
-	// ===== Customer (auth required — enforced by middleware at server level) =====
-	mux.HandleFunc("POST /api/v1/orders", h.CreateOrder)
-	mux.HandleFunc("GET /api/v1/orders/my", h.ListMyOrders)
-	mux.HandleFunc("GET /api/v1/orders/{id}", h.GetOrder)
-	mux.HandleFunc("POST /api/v1/orders/{id}/cancel", h.CancelOrder)
+	// Customer (auth)
+	mux.Handle("POST /api/v1/orders", authMW(http.HandlerFunc(h.CreateOrder)))
+	mux.Handle("GET /api/v1/orders/my", authMW(http.HandlerFunc(h.ListMyOrders)))
+	mux.Handle("GET /api/v1/orders/{id}", authMW(http.HandlerFunc(h.GetOrder)))
+	mux.Handle("POST /api/v1/orders/{id}/cancel", authMW(http.HandlerFunc(h.CancelOrder)))
 
-	// ===== Merchant =====
-	mux.HandleFunc("POST /api/v1/orders/{id}/confirm", h.ConfirmOrder)
-	mux.HandleFunc("POST /api/v1/orders/{id}/prepare", h.StartPreparing)
-	mux.HandleFunc("POST /api/v1/orders/{id}/ready", h.MarkReadyForPickup)
-	mux.HandleFunc("GET /api/v1/orders/restaurant/{restaurantID}", h.ListRestaurantOrders)
+	// Merchant (auth)
+	mux.Handle("POST /api/v1/orders/{id}/confirm", authMW(http.HandlerFunc(h.ConfirmOrder)))
+	mux.Handle("POST /api/v1/orders/{id}/prepare", authMW(http.HandlerFunc(h.StartPreparing)))
+	mux.Handle("POST /api/v1/orders/{id}/ready", authMW(http.HandlerFunc(h.MarkReadyForPickup)))
+	mux.Handle("GET /api/v1/orders/restaurant/{restaurantID}", authMW(http.HandlerFunc(h.ListRestaurantOrders)))
 
-	// ===== Dispatch (system/internal) =====
+	// System (no auth — called by dispatch module)
 	mux.HandleFunc("POST /api/v1/orders/{id}/dispatch", h.StartDispatch)
 	mux.HandleFunc("POST /api/v1/orders/{id}/assign", h.AssignDriver)
 
-	// ===== Driver =====
-	mux.HandleFunc("POST /api/v1/orders/{id}/pickup", h.MarkPickedUp)
-	mux.HandleFunc("POST /api/v1/orders/{id}/deliver", h.MarkDelivered)
-	mux.HandleFunc("GET /api/v1/orders/driver/{driverID}", h.ListDriverOrders)
+	// Driver (auth)
+	mux.Handle("POST /api/v1/orders/{id}/pickup", authMW(http.HandlerFunc(h.MarkPickedUp)))
+	mux.Handle("POST /api/v1/orders/{id}/deliver", authMW(http.HandlerFunc(h.MarkDelivered)))
+	mux.Handle("GET /api/v1/orders/driver/{driverID}", authMW(http.HandlerFunc(h.ListDriverOrders)))
 
-	// ===== Admin =====
-	mux.HandleFunc("GET /api/v1/orders", h.ListOrdersByStatus)
+	// Admin (auth)
+	mux.Handle("GET /api/v1/orders", authMW(http.HandlerFunc(h.ListOrdersByStatus)))
 }

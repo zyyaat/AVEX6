@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	// Run migrations.
-	if err := database.RunUp(ctx, dsn, migrations.IdentityMigrations, "identity"); err != nil {
+	if err := database.RunUp(ctx, dsn, migrations.IdentityMigrations, "identity", "identity"); err != nil {
 		fmt.Fprintf(os.Stderr, "migrations: %v\n", err)
 		os.Exit(1)
 	}
