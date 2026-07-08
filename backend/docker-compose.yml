@@ -1,21 +1,28 @@
 # =============================================================================
-# AVEX Backend — Infrastructure Docker Compose
+# AVEX Backend — Full Docker Compose (Infrastructure + Application)
 # =============================================================================
-# This file provisions ONLY the infrastructure (PostgreSQL + Redis) for local
-# development and testing. The application itself (cmd/server, cmd/worker)
-# runs on the host machine, not in Docker.
+# This file provisions the complete stack:
+#   - PostgreSQL 16 (database)
+#   - Redis 7 (event bus)
+#   - AVEX API Server (HTTP API + WebSocket)
+#   - AVEX Worker (outbox publisher)
 #
 # Usage:
-#   docker compose up -d          # start infrastructure
-#   docker compose down           # stop infrastructure
-#   docker compose down -v        # stop + delete data volumes
+#   docker compose up -d              # start everything
+#   docker compose up -d server       # start only the server
+#   docker compose down               # stop everything
+#   docker compose down -v            # stop + delete data volumes
+#   docker compose logs -f server     # tail server logs
+#   docker compose build              # rebuild images after code changes
 #
-# The application connects via:
-#   DATABASE_URL=postgres://avex:avex@localhost:5432/avex_dev?sslmode=disable
-#   REDIS_URL=redis://localhost:6379/0
+# Environment:
+#   The app reads from .env (for local dev) or environment variables
+#   set in this file. For production, override with real secrets.
 # =============================================================================
 
 services:
+  # ===== Infrastructure =====
+
   postgres:
     image: postgres:16-alpine
     container_name: avex-postgres
@@ -51,6 +58,68 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+  # ===== Application =====
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: avex-backend:latest
+    container_name: avex-server
+    restart: unless-stopped
+    environment:
+      APP_ROLE: server
+      DATABASE_URL: postgres://avex:avex@postgres:5432/avex_dev?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      APP_PORT: "8080"
+      APP_ENV: development
+      APP_NAME: "AVEX Delivery"
+      JWT_SECRET: "change-me-in-production-at-least-32-characters-long!!"
+      JWT_ISSUER: "avex"
+      JWT_ACCESS_TTL: "24h"
+      BCRYPT_COST: "10"
+      MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:-}
+      CORS_ALLOWED_ORIGINS: "*"
+      OUTBOX_POLL_INTERVAL: "2s"
+      OUTBOX_BATCH_SIZE: "50"
+      OUTBOX_MAX_RETRIES: "5"
+      OUTBOX_RETRY_BASE_DELAY: "1s"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: avex-backend:latest
+    container_name: avex-worker
+    restart: unless-stopped
+    environment:
+      APP_ROLE: worker
+      DATABASE_URL: postgres://avex:avex@postgres:5432/avex_dev?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      APP_ENV: development
+      OUTBOX_POLL_INTERVAL: "2s"
+      OUTBOX_BATCH_SIZE: "50"
+      OUTBOX_MAX_RETRIES: "5"
+      OUTBOX_RETRY_BASE_DELAY: "1s"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   avex_pgdata:
