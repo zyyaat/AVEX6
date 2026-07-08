@@ -1,20 +1,16 @@
-
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { driverAuthAPI, setAuthToken } from '@/lib/api'
+import { driverAuthAPI, setAuthToken, getAuthToken } from '@/lib/api'
 
 interface AuthState {
   token: string | null
-  driverId: string | null
-  driverName: string | null
-  driverPhone: string | null
-  mustChangePassword: boolean
+  userID: string | null
+  role: string | null
   isLoading: boolean
   isAuthenticated: boolean
 
-  login: (phone: string, password: string) => Promise<{ mustChangePassword: boolean }>
+  login: (phone: string, password: string) => Promise<void>
   logout: () => void
-  setMustChangePassword: (v: boolean) => void
   initialize: () => Promise<void>
 }
 
@@ -22,23 +18,23 @@ export const useAuth = create<AuthState>()(
   persist(
     (set, get) => ({
       token: null,
-      driverId: null,
-      driverName: null,
-      driverPhone: null,
-      mustChangePassword: false,
+      userID: null,
+      role: null,
       isLoading: false,
       isAuthenticated: false,
 
       login: async (phone, password) => {
         set({ isLoading: true })
         try {
-          const { token, mustChangePassword, driver } = await driverAuthAPI.login({ phone, password })
-          setAuthToken(token)
+          const result = await driverAuthAPI.login({ phone, password })
+          setAuthToken(result.token)
           set({
-            token, driverId: driver.id, driverName: driver.name, driverPhone: driver.phone,
-            mustChangePassword, isAuthenticated: true, isLoading: false,
+            token: result.token,
+            userID: result.user.id,
+            role: result.user.role,
+            isAuthenticated: true,
+            isLoading: false,
           })
-          return { mustChangePassword }
         } catch (err) {
           set({ isLoading: false })
           throw err
@@ -48,12 +44,12 @@ export const useAuth = create<AuthState>()(
       logout: () => {
         setAuthToken(null)
         set({
-          token: null, driverId: null, driverName: null, driverPhone: null,
-          mustChangePassword: false, isAuthenticated: false,
+          token: null,
+          userID: null,
+          role: null,
+          isAuthenticated: false,
         })
       },
-
-      setMustChangePassword: (v) => set({ mustChangePassword: v }),
 
       initialize: async () => {
         const token = get().token
@@ -66,10 +62,8 @@ export const useAuth = create<AuthState>()(
       name: 'avex-driver-auth',
       partialize: (state) => ({
         token: state.token,
-        driverId: state.driverId,
-        driverName: state.driverName,
-        driverPhone: state.driverPhone,
-        mustChangePassword: state.mustChangePassword,
+        userID: state.userID,
+        role: state.role,
         isAuthenticated: state.isAuthenticated,
       }),
     }

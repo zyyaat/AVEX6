@@ -1,16 +1,16 @@
-
 import { motion } from 'framer-motion'
 import {
-  Store, Package, MapPin, User, Phone, Navigation, ArrowRight,
-  CheckCircle2, Loader2, Clock, TrendingUp, AlertCircle
+  Store, Package, MapPin, Phone, Navigation, ArrowRight,
+  CheckCircle2, Loader2, Clock, AlertCircle, ChevronDown,
 } from 'lucide-react'
 import { useDriver } from '@/store/driver'
 import { toast } from 'sonner'
 import { useState } from 'react'
 
 export function ActiveDelivery() {
-  const { activeOrder, pickedUp, arrived, delivered, refreshActiveOrder } = useDriver()
+  const { activeOrder, markPickedUp, markDelivered, refreshActiveOrder } = useDriver()
   const [busy, setBusy] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
 
   if (!activeOrder) return null
 
@@ -18,7 +18,7 @@ export function ActiveDelivery() {
 
   const statusLabels: Record<string, string> = {
     assigned: 'تم القبول — اذهب للمطعم',
-    picked_up: 'تم الاستلام — اضغط عند الوصول للعميل',
+    picked_up: 'تم الاستلام — اذهب للعميل',
     on_the_way: 'في الطريق للعميل',
     delivering: 'في الطريق للعميل',
     delivered: 'تم التوصيل',
@@ -27,22 +27,10 @@ export function ActiveDelivery() {
   const handlePickedUp = async () => {
     setBusy('picked')
     try {
-      await pickedUp(o.id)
-      toast.success('تم تأكيد الاستلام من المطعم')
+      await markPickedUp(o.id)
+      toast.success('تم تأكيد الاستلام')
     } catch (err: any) {
-      toast.error(err.message || 'تعذّر الاستلام')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const handleArrived = async () => {
-    setBusy('arrived')
-    try {
-      await arrived(o.id)
-      toast.success('في الطريق للعميل')
-    } catch (err: any) {
-      toast.error(err.message || 'تعذّر التحديث')
+      toast.error(err.message || 'فشل تأكيد الاستلام')
     } finally {
       setBusy(null)
     }
@@ -51,178 +39,165 @@ export function ActiveDelivery() {
   const handleDelivered = async () => {
     setBusy('delivered')
     try {
-      const earnings = await delivered(o.id)
-      toast.success(`تم التسليم — أرباحك: ${earnings.toFixed(2)} ج.م`)
+      await markDelivered(o.id)
+      toast.success('تم التوصيل بنجاح! 🎉')
     } catch (err: any) {
-      toast.error(err.message || 'تعذّر التسليم')
+      toast.error(err.message || 'فشل تأكيد التوصيل')
     } finally {
       setBusy(null)
     }
   }
 
-  // Step indicator
-  const steps = [
-    { key: 'assigned', label: 'المطعم', icon: Store },
-    { key: 'picked_up', label: 'الاستلام', icon: Package },
-    { key: 'on_the_way', label: 'الطريق', icon: Navigation },
-    { key: 'delivered', label: 'التسليم', icon: CheckCircle2 },
-  ]
-  const currentStepIdx = steps.findIndex(s => s.key === o.status)
-  if (o.status === 'delivering') currentStepIdx === 2
-
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-lg border-2 border-black p-4 mb-4 shadow-fluent"
+      initial={{ y: 100 }}
+      animate={{ y: 0 }}
+      className="bg-white rounded-t-2xl shadow-2xl"
+      style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       dir="rtl"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-bold text-sm">التوصيل الحالي</h3>
-          <p className="text-xs text-gray-400" dir="ltr">{o.orderNumber}</p>
-        </div>
-        <span className="text-xs font-bold bg-black text-white px-2.5 py-1 rounded-full">
+      {/* Status bar */}
+      <div
+        className="px-5 py-2.5 flex items-center justify-between rounded-t-2xl"
+        style={{ backgroundColor: '#FF6B35' }}
+      >
+        <span className="text-white font-medium text-sm">
           {statusLabels[o.status] || o.status}
         </span>
+        <span className="text-white/80 text-xs font-mono">#{o.order_number}</span>
       </div>
 
-      {/* Steps */}
-      <div className="flex items-center justify-between mb-4 px-1">
-        {steps.map((s, i) => {
-          const Icon = s.icon
-          const done = i < currentStepIdx
-          const current = i === currentStepIdx
-          return (
-            <div key={s.key} className="flex items-center flex-1 last:flex-none">
-              <div className="flex flex-col items-center gap-1">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-fluent ${
-                    done ? 'bg-black text-white' : current ? 'bg-black text-white ring-4 ring-gray-200' : 'bg-gray-100 text-gray-400'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                </div>
-                <span className={`text-[9px] ${current || done ? 'font-bold text-black' : 'text-gray-400'}`}>{s.label}</span>
-              </div>
-              {i < steps.length - 1 && (
-                <div className={`flex-1 h-0.5 mx-1 ${done ? 'bg-black' : 'bg-gray-200'}`} />
+      {/* Main content */}
+      <div className="px-5 py-4">
+        {/* Customer/Restaurant info */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center">
+              {o.status === 'assigned' ? (
+                <Store className="w-5 h-5 text-gray-600" />
+              ) : (
+                <Package className="w-5 h-5 text-gray-600" />
               )}
             </div>
-          )
-        })}
-      </div>
-
-      {/* Restaurant */}
-      <div className="bg-gray-50 rounded-lg p-3 mb-2 border border-gray-200">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Store className="w-4 h-4 text-gray-600" />
-            <span className="font-bold text-sm">{o.restaurantName}</span>
-          </div>
-          <a
-            href={`https://www.google.com/maps?q=${o.restaurantLat},${o.restaurantLng}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-black underline flex items-center gap-1"
-          >
-            <Navigation className="w-3 h-3" /> خريطة
-          </a>
-        </div>
-      </div>
-
-      {/* Items */}
-      <div className="bg-gray-50 rounded-lg p-3 mb-2 border border-gray-200">
-        <p className="text-xs text-gray-500 mb-1.5">الأصناف:</p>
-        <div className="space-y-1">
-          {o.items.map((it, i) => (
-            <div key={i} className="flex items-center justify-between text-xs">
-              <span>{it.quantity}× {it.name}</span>
-              <span className="text-gray-500">{(it.price * it.quantity).toFixed(2)} ج.م</span>
+            <div>
+              <p className="font-bold text-gray-900 text-sm">
+                {o.status === 'assigned' ? o.restaurant_name : o.customer_name}
+              </p>
+              <p className="text-xs text-gray-500">
+                {o.status === 'assigned' ? 'المطعم' : 'العميل'}
+              </p>
             </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Customer */}
-      <div className="bg-gray-50 rounded-lg p-3 mb-3 border border-gray-200">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <User className="w-4 h-4 text-gray-600" />
-            <span className="font-bold text-sm">{o.customerName}</span>
           </div>
-          <a href={`tel:${o.phone}`} className="w-8 h-8 rounded-full bg-black text-white flex items-center justify-center">
-            <Phone className="w-3.5 h-3.5" />
-          </a>
+
+          {/* Call + Chat buttons */}
+          <div className="flex items-center gap-2">
+            <a
+              href={`tel:${o.customer_phone}`}
+              className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+              style={{ backgroundColor: '#FFF0E8' }}
+            >
+              <Phone className="w-4 h-4" style={{ color: '#FF6B35' }} />
+            </a>
+          </div>
         </div>
-        <div className="flex items-start gap-2 mb-1.5">
-          <MapPin className="w-4 h-4 text-gray-400 mt-0.5" />
-          <span className="text-xs text-gray-600 flex-1">{o.locationAddress}</span>
+
+        {/* Address */}
+        <div className="flex items-start gap-2 mb-3">
+          <MapPin className="w-4 h-4 text-gray-400 mt-0.5 shrink-0" />
+          <p className="text-sm text-gray-600 flex-1">{o.delivery_address}</p>
         </div>
-        <a
-          href={o.locationUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-between gap-2 bg-white rounded-lg p-2 border border-gray-200 hover:border-gray-400 transition-fluent"
+
+        {/* Expandable details */}
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 text-xs text-gray-500 mb-2"
         >
-          <span className="text-xs font-medium flex items-center gap-1.5">
-            <Navigation className="w-3.5 h-3.5" /> موقع العميل على الخريطة
-          </span>
-          <ArrowRight className="w-3.5 h-3.5 text-gray-400" />
-        </a>
+          <span>التفاصيل</span>
+          <ChevronDown className={`w-4 h-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+
+        {expanded && (
+          <div className="space-y-2 pt-2 border-t border-gray-100">
+            {/* Phone */}
+            <div className="flex items-center gap-2 text-sm">
+              <Phone className="w-4 h-4 text-gray-400" />
+              <span className="text-gray-600" dir="ltr">{o.customer_phone}</span>
+            </div>
+            {/* Order time */}
+            <div className="flex items-center gap-2 text-sm">
+              <Clock className="w-4 h-4 text-gray-400" />
+              <span className="text-gray-600">
+                {new Date(o.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+            {/* Total */}
+            <div className="flex items-center justify-between text-sm pt-1">
+              <span className="text-gray-500">الإجمالي</span>
+              <span className="font-bold text-gray-900">
+                {(o.total / 100).toFixed(2)} {o.currency}
+              </span>
+            </div>
+            {/* Payment method */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-500">طريقة الدفع</span>
+              <span className="text-gray-700">
+                {o.payment_method === 'cash' ? 'نقدي' : o.payment_method === 'card' ? 'بطاقة' : 'محفظة'}
+              </span>
+            </div>
+            {/* Items */}
+            {o.items && o.items.length > 0 && (
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs text-gray-500 mb-1">الطلبات ({o.items.length})</p>
+                {o.items.map((item, i) => (
+                  <div key={i} className="flex justify-between text-sm py-0.5">
+                    <span className="text-gray-600">{item.name_ar || item.name} ×{item.quantity}</span>
+                    <span className="text-gray-500">{(item.price / 100).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Action button */}
+        <div className="pt-3">
+          {o.status === 'assigned' && (
+            <button
+              onClick={handlePickedUp}
+              disabled={busy === 'picked'}
+              className="w-full h-12 rounded-xl font-semibold text-white flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+              style={{ backgroundColor: '#FF6B35' }}
+            >
+              {busy === 'picked' ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5" />
+                  تأكيد الاستلام من المطعم
+                </>
+              )}
+            </button>
+          )}
+
+          {(o.status === 'picked_up' || o.status === 'on_the_way' || o.status === 'delivering') && (
+            <button
+              onClick={handleDelivered}
+              disabled={busy === 'delivered'}
+              className="w-full h-12 rounded-xl font-semibold text-white flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+              style={{ backgroundColor: '#10B981' }}
+            >
+              {busy === 'delivered' ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <CheckCircle2 className="w-5 h-5" />
+                  تأكيد التوصيل للعميل
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-2 mb-3">
-        <div className="text-center p-2 bg-gray-50 rounded-lg border border-gray-200">
-          <p className="text-xs font-bold">{o.dispatchDistanceM} م</p>
-          <p className="text-[9px] text-gray-400">للمطعم</p>
-        </div>
-        <div className="text-center p-2 bg-gray-50 rounded-lg border border-gray-200">
-          <p className="text-xs font-bold">{o.deliveryDistanceM} م</p>
-          <p className="text-[9px] text-gray-400">للعميل</p>
-        </div>
-        <div className="text-center p-2 bg-black text-white rounded-lg">
-          <p className="text-xs font-bold">{o.driverFee.toFixed(2)}</p>
-          <p className="text-[9px] text-gray-300">ج.م</p>
-        </div>
-      </div>
-
-      {/* Action button */}
-      {o.status === 'assigned' && (
-        <button
-          onClick={handlePickedUp}
-          disabled={busy !== null}
-          className="w-full h-12 rounded-lg bg-black hover:bg-gray-800 text-white text-sm font-bold flex items-center justify-center gap-2 transition-fluent disabled:opacity-50"
-        >
-          {busy === 'picked' ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Package className="w-5 h-5" /> وصلت للمطعم — استلم الطلب</>}
-        </button>
-      )}
-      {o.status === 'picked_up' && (
-        <button
-          onClick={handleArrived}
-          disabled={busy !== null}
-          className="w-full h-12 rounded-lg bg-black hover:bg-gray-800 text-white text-sm font-bold flex items-center justify-center gap-2 transition-fluent disabled:opacity-50"
-        >
-          {busy === 'arrived' ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Navigation className="w-5 h-5" /> بدأت التوصيل للعميل</>}
-        </button>
-      )}
-      {(o.status === 'on_the_way' || o.status === 'delivering') && (
-        <button
-          onClick={handleDelivered}
-          disabled={busy !== null}
-          className="w-full h-12 rounded-lg bg-black hover:bg-gray-800 text-white text-sm font-bold flex items-center justify-center gap-2 transition-fluent disabled:opacity-50"
-        >
-          {busy === 'delivered' ? <Loader2 className="w-5 h-5 animate-spin" /> : <><CheckCircle2 className="w-5 h-5" /> وصلت للعميل — تأكيد التسليم</>}
-        </button>
-      )}
-
-      {/* Geofence hint */}
-      <p className="text-[10px] text-gray-400 mt-2 text-center flex items-center justify-center gap-1">
-        <AlertCircle className="w-3 h-3" />
-        يجب أن تكون على بُعد 70م من المطعم للاستلام و50م من العميل للتسليم
-      </p>
     </motion.div>
   )
 }

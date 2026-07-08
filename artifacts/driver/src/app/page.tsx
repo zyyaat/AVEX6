@@ -1,445 +1,316 @@
-
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from '@/lib/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Bike, Power, MapPin, Clock, TrendingUp, Star, Package,
-  Zap, AlertCircle, Loader2, Navigation, Store, User,
+  Headphones, Menu, Power, Navigation, Clock,
+  Loader2, ChevronDown, Phone, MessageCircle, X,
+  Store, User, Package,
 } from 'lucide-react'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
 import { useAuth } from '@/store/auth'
 import { useDriver } from '@/store/driver'
-import { BottomTabBar } from '@/components/BottomTabBar'
-import { TierBadge } from '@/components/TierBadge'
+import { useWebSocket } from '@/hooks/use-websocket'
+import { useLocationTracking } from '@/hooks/use-location-tracking'
 import { OfferModal } from '@/components/OfferModal'
 import { ActiveDelivery } from '@/components/ActiveDelivery'
+import { SideDrawer } from '@/components/SideDrawer'
 import { toast } from 'sonner'
+
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
 export default function DriverHome() {
   const router = useRouter()
-  const { isAuthenticated, mustChangePassword, logout } = useAuth()
+  const { isAuthenticated, logout, userID } = useAuth()
   const {
     driver, offers, activeOrder,
-    fetchMe, setOnline, updateLocation, refreshOffers, refreshActiveOrder, clear,
+    fetchDriver, setOnline, setOffline, clear,
   } = useDriver()
+
   const [bootChecked, setBootChecked] = useState(false)
   const [togglingOnline, setTogglingOnline] = useState(false)
   const [activeOffer, setActiveOffer] = useState<string | null>(null)
-  const locationIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const offersIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const activeIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [bottomCardExpanded, setBottomCardExpanded] = useState(false)
 
-  // Boot: check auth + load driver
+  const mapContainerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<mapboxgl.Map | null>(null)
+  const driverMarkerRef = useRef<mapboxgl.Marker | null>(null)
+
+  // ===== WebSocket =====
+  const { isConnected, subscribe } = useWebSocket({
+    onMessage: (msg) => {
+      // Handle incoming WebSocket messages
+      switch (msg.type) {
+        case 'dispatch.offer_created':
+          // New offer — refresh offers
+          useDriver.getState().refreshOffers()
+          toast.info('عرض جديد متاح!')
+          // Haptic feedback
+          if (navigator.vibrate) navigator.vibrate(200)
+          break
+        case 'order.status_changed':
+          // Order status changed — refresh active order
+          useDriver.getState().refreshActiveOrder()
+          break
+        case 'driver.status_changed':
+          // Driver status changed — refresh driver
+          useDriver.getState().fetchDriver()
+          break
+      }
+    },
+  })
+
+  // ===== Location tracking =====
+  useLocationTracking({
+    enabled: driver?.status === 'online' || driver?.status === 'busy',
+    interval: 5000,
+  })
+
+  // ===== Boot =====
   useEffect(() => {
     if (!isAuthenticated) {
       router.replace('/login')
       return
     }
-    if (mustChangePassword) {
-      router.replace('/change-password')
-      return
-    }
     setBootChecked(true)
-    fetchMe()
-  }, [isAuthenticated, mustChangePassword, router, fetchMe])
+    fetchDriver()
+  }, [isAuthenticated, router, fetchDriver])
 
-  // Watch GPS + send to backend when online
+  // ===== Subscribe to WebSocket channels =====
   useEffect(() => {
-    if (!driver?.isOnline) {
-      if (locationIntervalRef.current) {
-        clearInterval(locationIntervalRef.current)
-        locationIntervalRef.current = null
-      }
-      return
+    if (!isConnected || !driver) return
+    // Subscribe to the driver's own channel
+    subscribe(`driver:${driver.id}`)
+    // If driver has an active order, subscribe to that too
+    if (driver.current_order_id) {
+      subscribe(`order:${driver.current_order_id}`)
     }
-    if (!navigator.geolocation) {
-      toast.error('المتصفح لا يدعم تحديد الموقع')
-      return
-    }
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => updateLocation(pos.coords.latitude, pos.coords.longitude),
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-    )
-    locationIntervalRef.current = setInterval(() => {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => updateLocation(pos.coords.latitude, pos.coords.longitude),
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 5000 }
-      )
-    }, 5000)
-    return () => {
-      navigator.geolocation.clearWatch(watchId)
-      if (locationIntervalRef.current) clearInterval(locationIntervalRef.current)
-    }
-  }, [driver?.isOnline, updateLocation])
+  }, [isConnected, driver, subscribe])
 
-  // Poll offers when online and no active order
+  // ===== Initialize Mapbox =====
   useEffect(() => {
-    if (!driver?.isOnline || activeOrder) {
-      if (offersIntervalRef.current) {
-        clearInterval(offersIntervalRef.current)
-        offersIntervalRef.current = null
-      }
-      return
-    }
-    refreshOffers()
-    offersIntervalRef.current = setInterval(refreshOffers, 3000)
-    return () => {
-      if (offersIntervalRef.current) clearInterval(offersIntervalRef.current)
-    }
-  }, [driver?.isOnline, activeOrder, refreshOffers])
+    if (!mapContainerRef.current || mapRef.current) return
 
-  // Poll active order
+    mapboxgl.accessToken = MAPBOX_TOKEN
+    const map = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [31.2357, 30.0444], // Cairo
+      zoom: 13,
+      attributionControl: false,
+    })
+
+    map.addControl(new mapboxgl.NavigationControl(), 'top-left')
+
+    map.on('load', () => {
+      // Try to get user's current location
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            map.setCenter([pos.coords.longitude, pos.coords.latitude])
+          },
+          () => {},
+          { enableHighAccuracy: true, timeout: 5000 }
+        )
+      }
+    })
+
+    mapRef.current = map
+
+    return () => {
+      map.remove()
+      mapRef.current = null
+    }
+  }, [])
+
+  // ===== Update driver marker on map =====
   useEffect(() => {
-    if (!activeOrder) {
-      if (activeIntervalRef.current) {
-        clearInterval(activeIntervalRef.current)
-        activeIntervalRef.current = null
-      }
-      return
-    }
-    activeIntervalRef.current = setInterval(refreshActiveOrder, 5000)
-    return () => {
-      if (activeIntervalRef.current) clearInterval(activeIntervalRef.current)
-    }
-  }, [activeOrder, refreshActiveOrder])
+    if (!mapRef.current || !driver) return
+    // Try to get driver location from the map or API
+    // For now, center on Cairo if no location
+  }, [driver])
 
+  // ===== Auto-refresh offers =====
+  useEffect(() => {
+    if (!driver || driver.status !== 'online') return
+    const interval = setInterval(() => {
+      useDriver.getState().refreshOffers()
+    }, 10000) // poll every 10s as fallback for WebSocket
+    return () => clearInterval(interval)
+  }, [driver])
+
+  // ===== Handle new offer =====
+  useEffect(() => {
+    if (offers.length > 0 && !activeOffer && !activeOrder) {
+      setActiveOffer(offers[0].id)
+    }
+  }, [offers, activeOffer, activeOrder])
+
+  // ===== Toggle online/offline =====
   const handleToggleOnline = async () => {
     setTogglingOnline(true)
     try {
-      const next = !driver?.isOnline
-      await setOnline(next)
-      toast.success(next ? 'أنت الآن متصل — استقبال الطلبات مفعّل' : 'تم إيقاف الاستقبال')
+      if (driver?.status === 'online') {
+        await setOffline()
+        toast.success('أنت الآن غير متصل')
+      } else {
+        await setOnline()
+        toast.success('أنت الآن متصل — بانتظار الطلبات')
+      }
     } catch (err: any) {
-      toast.error(err.message || 'تعذّر التبديل')
+      toast.error(err.message || 'فشل تغيير الحالة')
     } finally {
       setTogglingOnline(false)
     }
   }
 
-  const handleLogout = () => {
-    clear()
-    logout()
-    router.replace('/login')
-  }
-
-  // Pick the most recent offer to show in modal
-  const currentOffer = activeOffer ? offers.find((o) => o.offerId === activeOffer) : offers[0]
-  useEffect(() => {
-    if (offers.length > 0 && !activeOffer) {
-      setActiveOffer(offers[0].offerId)
-    }
-    if (offers.length === 0) setActiveOffer(null)
-  }, [offers, activeOffer])
-
   if (!bootChecked) {
     return (
-      <div className="min-h-dvh bg-white flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin" />
+      <div className="min-h-dvh flex items-center justify-center bg-white">
+        <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
       </div>
     )
   }
 
+  const isOnline = driver?.status === 'online' || driver?.status === 'busy'
+
   return (
-    <div className="min-h-dvh bg-gray-50" dir="rtl">
-      {/* Header */}
-      <header className="sticky top-0 z-30 bg-white border-b border-gray-200 px-4 h-14 flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <Bike className="w-5 h-5 text-black flex-shrink-0" />
-          <span className="font-bold text-lg hidden sm:inline">AVEX Driver</span>
-          {driver?.tier && (
-            <TierBadge
-              nameAr={driver.tier.nameAr}
-              color={driver.tier.color}
-              sortOrder={driver.tier.sortOrder}
-              size="sm"
-            />
-          )}
-        </div>
+    <div className="min-h-dvh bg-white relative overflow-hidden" dir="rtl">
+      {/* ===== Full-screen Map ===== */}
+      <div ref={mapContainerRef} className="absolute inset-0" />
+
+      {/* ===== Top Bar ===== */}
+      <div
+        className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 h-14"
+        style={{
+          backgroundColor: 'rgba(91, 192, 222, 0.95)',
+          backdropFilter: 'blur(8px)',
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
+      >
+        {/* Support */}
         <button
-          onClick={handleToggleOnline}
-          disabled={togglingOnline}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-fluent disabled:opacity-50 ${
-            driver?.isOnline ? 'bg-black text-white' : 'bg-gray-100 text-gray-500'
-          }`}
+          onClick={() => router.push('/support')}
+          className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/30 transition-colors"
         >
-          {togglingOnline ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <div className={`w-2 h-2 rounded-full ${driver?.isOnline ? 'bg-white animate-pulse' : 'bg-gray-400'}`} />
-          )}
-          <span className="hidden sm:inline">{driver?.isOnline ? 'متصل' : 'غير متصل'}</span>
-          <Power className="w-3.5 h-3.5" />
+          <Headphones className="w-5 h-5" />
         </button>
-      </header>
 
-      <div className="container mx-auto px-4 py-4 max-w-md pb-20 sm:pb-4">
-        {/* Online status banner (when online) */}
-        <AnimatePresence>
-          {driver?.isOnline && !activeOrder && (
-            <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              className="bg-black text-white rounded-xl p-3 mb-4 flex items-center gap-2"
-            >
-              <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-              <span className="text-sm font-medium">أنت متصل الآن — في انتظار الطلبات</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Driver name + status */}
+        <div className="flex items-center gap-2">
+          <span className="text-white font-medium text-sm">المندوب</span>
+          <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-gray-400'} animate-pulse`} />
+        </div>
 
-        {/* Active delivery (top priority) */}
-        {activeOrder && <ActiveDelivery />}
+        {/* Menu */}
+        <button
+          onClick={() => setDrawerOpen(true)}
+          className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/30 transition-colors"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      </div>
 
-        {/* Stats bar */}
-        {!activeOrder && (
-          <div className="grid grid-cols-4 gap-2 mb-4">
-            <StatTile
-              icon={<Package className="w-4 h-4" />}
-              value={driver?.stats.completedOrders ?? 0}
-              label="مكتمل"
-            />
-            <StatTile
-              icon={<TrendingUp className="w-4 h-4" />}
-              value={`${driver?.stats.acceptanceRate.toFixed(0) ?? 0}%`}
-              label="قبول"
-            />
-            <StatTile
-              icon={<Star className="w-4 h-4" />}
-              value={driver?.stats.rating.toFixed(1) ?? '0.0'}
-              label="تقييم"
-            />
-            <StatTile
-              icon={<Zap className="w-4 h-4" />}
-              value={driver?.stats.totalEarnings.toFixed(0) ?? 0}
-              label="ج.م"
-            />
-          </div>
+      {/* ===== Recenter button ===== */}
+      <button
+        onClick={() => {
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition((pos) => {
+              mapRef.current?.setCenter([pos.coords.longitude, pos.coords.latitude])
+            })
+          }
+        }}
+        className="absolute bottom-32 left-4 z-10 w-10 h-10 rounded-full bg-white shadow-lg flex items-center justify-center hover:bg-gray-50 transition-colors"
+      >
+        <Navigation className="w-5 h-5 text-gray-700" />
+      </button>
+
+      {/* ===== Online/Offline toggle ===== */}
+      <button
+        onClick={handleToggleOnline}
+        disabled={togglingOnline}
+        className="absolute bottom-32 right-4 z-10 flex items-center gap-2 px-4 h-10 rounded-full shadow-lg font-medium text-sm transition-all active:scale-95 disabled:opacity-50"
+        style={{
+          backgroundColor: isOnline ? '#FF6B35' : '#fff',
+          color: isOnline ? '#fff' : '#333',
+        }}
+      >
+        {togglingOnline ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : (
+          <Power className="w-4 h-4" />
         )}
+        {isOnline ? 'متصل' : 'غير متصل'}
+      </button>
 
-        {/* Available offers (only when online + no active order) */}
-        {!activeOrder && driver?.isOnline && (
-          <div>
-            <h3 className="text-sm font-bold text-black mb-3 flex items-center gap-2">
-              <Zap className="w-4 h-4" />
-              طلبات متاحة ({offers.length})
-            </h3>
-            {offers.length === 0 ? (
-              <EmptyOffers />
-            ) : (
-              <div className="space-y-3">
-                {offers.map((offer, idx) => (
-                  <motion.div
-                    key={offer.offerId}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.05 }}
-                  >
-                    <OfferCard offer={offer} onClick={() => setActiveOffer(offer.offerId)} />
-                  </motion.div>
-                ))}
+      {/* ===== Bottom Card ===== */}
+      <div className="absolute bottom-0 left-0 right-0 z-10">
+        {activeOrder ? (
+          <ActiveDelivery />
+        ) : (
+          <motion.div
+            initial={{ y: 100 }}
+            animate={{ y: 0 }}
+            className="bg-white rounded-t-2xl shadow-2xl px-5 py-4 pb-6"
+            style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom, 0px))' }}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-800 text-sm font-medium">
+                {isOnline ? 'لا يوجد طلبات حالياً' : 'أنت غير متصل'}
+              </p>
+              <button
+                onClick={() => setBottomCardExpanded(!bottomCardExpanded)}
+                className="text-gray-400"
+              >
+                <ChevronDown className={`w-5 h-5 transition-transform ${bottomCardExpanded ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+            <p className="text-gray-500 text-xs">
+              {isOnline
+                ? 'يمكنك الانتظار للحصول على طلب جديد'
+                : 'اضغط على زر "متصل" للبدء في استقبال الطلبات'}
+            </p>
+
+            {bottomCardExpanded && (
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Clock className="w-4 h-4" />
+                  <span>الشيفت الحالي: {new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Package className="w-4 h-4" />
+                  <span>طلبات اليوم: {driver?.total_deliveries || 0}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <User className="w-4 h-4" />
+                  <span>التقييم: {driver?.rating.toFixed(1) || '5.0'} ⭐</span>
+                </div>
               </div>
             )}
-          </div>
+          </motion.div>
         )}
+      </div>
 
-        {/* Offline state */}
-        {!driver?.isOnline && !activeOrder && (
-          <OfflineState
-            onToggle={handleToggleOnline}
-            toggling={togglingOnline}
+      {/* ===== Offer Modal ===== */}
+      <AnimatePresence>
+        {activeOffer && (
+          <OfferModal
+            offer={offers.find((o) => o.id === activeOffer)!}
+            onClose={() => setActiveOffer(null)}
           />
         )}
+      </AnimatePresence>
 
-        {/* Tier progress card */}
-        {!activeOrder && driver?.nextTier && (
-          <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4 shadow-fluent">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-gray-500" />
-                <span className="text-sm font-bold">تقدّم المستوى</span>
-              </div>
-              {driver.tier && (
-                <TierBadge
-                  nameAr={driver.tier.nameAr}
-                  color={driver.tier.color}
-                  sortOrder={driver.tier.sortOrder}
-                  size="sm"
-                />
-              )}
-            </div>
-            <p className="text-xs text-gray-600 mb-3">
-              المستوى التالي: <b>{driver.nextTier.nameAr}</b>
-            </p>
-            <div className="space-y-2.5">
-              <ProgressRow
-                label="الطلبات المكتملة"
-                current={driver.stats.completedOrders}
-                target={driver.nextTier.minLifetimeOrders}
-              />
-              <ProgressRow
-                label="نسبة القبول"
-                current={driver.stats.acceptanceRate}
-                target={driver.nextTier.minAcceptanceRate}
-                suffix="%"
-              />
-              <ProgressRow
-                label="التقييم"
-                current={driver.stats.rating}
-                target={driver.nextTier.minCustomerRating}
-                step={0.1}
-              />
-              <ProgressRow
-                label="الالتزام بالوقت"
-                current={driver.stats.onTimeRate}
-                target={driver.nextTier.minOnTimeRate}
-                suffix="%"
-              />
-              <ProgressRow
-                label="الحضور للشيفت"
-                current={driver.stats.shiftAdherence}
-                target={driver.nextTier.minShiftAdherence}
-                suffix="%"
-              />
-            </div>
-          </div>
-        )}
-      </div>
+      {/* ===== Side Drawer ===== */}
+      <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
-      {/* Offer Modal */}
-      {currentOffer && (
-        <OfferModal offer={currentOffer} onClose={() => setActiveOffer(null)} />
+      {/* ===== Connection indicator ===== */}
+      {!isConnected && isOnline && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-yellow-100 text-yellow-800 text-xs px-3 py-1 rounded-full shadow">
+          جاري إعادة الاتصال...
+        </div>
       )}
-
-      <BottomTabBar />
     </div>
-  )
-}
-
-// ===== Sub-components =====
-
-function StatTile({ icon, value, label }: { icon: React.ReactNode; value: React.ReactNode; label: string }) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-2.5 text-center shadow-fluent">
-      <div className="flex items-center justify-center text-gray-500 mb-1">{icon}</div>
-      <p className="text-base font-bold text-black">{value}</p>
-      <p className="text-[10px] text-gray-400">{label}</p>
-    </div>
-  )
-}
-
-function ProgressRow({
-  label, current, target, suffix = '', step = 1,
-}: {
-  label: string
-  current: number
-  target: number
-  suffix?: string
-  step?: number
-}) {
-  const pct = target > 0 ? Math.min(100, (current / target) * 100) : 100
-  const reached = current >= target
-  return (
-    <div>
-      <div className="flex items-center justify-between text-xs mb-1">
-        <span className="text-gray-600">{label}</span>
-        <span className={`font-bold ${reached ? 'text-black' : 'text-gray-500'}`}>
-          {current.toFixed(step < 1 ? 1 : 0)}{suffix} / {target}{suffix}
-        </span>
-      </div>
-      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full transition-all duration-500 ${reached ? 'bg-black' : 'bg-gray-400'}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function EmptyOffers() {
-  return (
-    <div className="text-center py-16">
-      <motion.div
-        animate={{ scale: [1, 1.05, 1] }}
-        transition={{ duration: 2, repeat: Infinity }}
-        className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3"
-      >
-        <Package className="w-7 h-7 text-gray-300" />
-      </motion.div>
-      <p className="text-sm text-gray-500 font-medium">في انتظار الطلبات...</p>
-      <p className="text-xs text-gray-400 mt-1">سيظهر أي طلب جديد هنا فور قبول المطعم</p>
-    </div>
-  )
-}
-
-function OfferCard({ offer, onClick }: { offer: any; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-right bg-white rounded-xl border border-gray-200 p-4 hover:border-gray-400 transition-fluent shadow-fluent"
-    >
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-            <Store className="w-4 h-4 text-black" />
-          </div>
-          <div className="min-w-0">
-            <p className="font-bold text-sm truncate">{offer.restaurantName}</p>
-            <p className="text-[10px] text-gray-400" dir="ltr">{offer.orderNumber}</p>
-          </div>
-        </div>
-        <div className="text-left flex-shrink-0">
-          <p className="font-bold text-sm">{offer.driverFee.toFixed(2)} ج.م</p>
-          <p className="text-[10px] text-gray-400">أرباحك</p>
-        </div>
-      </div>
-
-      <div className="space-y-1.5 text-xs text-gray-600 mb-3">
-        <div className="flex items-center gap-1.5">
-          <MapPin className="w-3.5 h-3.5 text-gray-400" />
-          <span>{offer.zoneName}</span>
-          <span className="text-gray-300">•</span>
-          <span>{Math.round(offer.distanceM)} م منك</span>
-        </div>
-        <div className="flex items-start gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-gray-400 mt-0.5" />
-          <span className="flex-1 line-clamp-2">{offer.itemsSummary}</span>
-        </div>
-      </div>
-
-      <div className="bg-black text-white text-center py-2.5 rounded-lg text-xs font-bold">
-        اضغط لعرض التفاصيل والقبول
-      </div>
-    </button>
-  )
-}
-
-function OfflineState({ onToggle, toggling }: { onToggle: () => void; toggling: boolean }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="text-center py-16"
-    >
-      <motion.div
-        animate={{ scale: [1, 1.05, 1] }}
-        transition={{ duration: 2.5, repeat: Infinity }}
-        className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-5"
-      >
-        <Power className="w-10 h-10 text-gray-300" />
-      </motion.div>
-      <h3 className="font-bold text-black mb-1 text-lg">أنت غير متصل</h3>
-      <p className="text-sm text-gray-500 mb-6">اضغط للاتصال وبدء استقبال الطلبات</p>
-      <button
-        onClick={onToggle}
-        disabled={toggling}
-        className="px-8 h-12 rounded-xl bg-black text-white text-sm font-bold hover:bg-gray-800 active:bg-gray-900 transition-fluent inline-flex items-center gap-2 disabled:opacity-50"
-      >
-        {toggling ? <Loader2 className="w-5 h-5 animate-spin" /> : <Power className="w-5 h-5" />}
-        ابدأ العمل
-      </button>
-    </motion.div>
   )
 }
