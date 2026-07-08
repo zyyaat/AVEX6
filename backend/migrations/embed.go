@@ -36,3 +36,8 @@ var DispatchMigrations embed.FS
 //
 //go:embed realtime
 var RealtimeMigrations embed.FS
+
+// NotificationsMigrations embeds all SQL files under migrations/notifications/.
+//
+//go:embed notifications
+var NotificationsMigrations embed.FS

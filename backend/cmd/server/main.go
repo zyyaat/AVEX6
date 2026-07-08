@@ -16,6 +16,8 @@ import (
         "avex-backend/internal/modules/financial"
         "avex-backend/internal/modules/identity"
         httptransport "avex-backend/internal/modules/identity/transport/http"
+        "avex-backend/internal/modules/notifications"
+        notifjobs "avex-backend/internal/modules/notifications/jobs"
         "avex-backend/internal/modules/orders"
         "avex-backend/internal/modules/realtime"
         realtimejobs "avex-backend/internal/modules/realtime/jobs"
@@ -86,6 +88,12 @@ func main() {
         }
         log.Info("realtime migrations complete")
 
+        if err := database.RunUp(ctx, cfg.Database.URL, migrations.NotificationsMigrations, "notifications", "notifications"); err != nil {
+                log.Error("notifications migrations failed", "error", err)
+                os.Exit(1)
+        }
+        log.Info("notifications migrations complete")
+
         // 5. Wire modules.
         identityMod := identity.New(cfg, dbPool.Pool(), log)
         defer identityMod.Close()
@@ -115,6 +123,11 @@ func main() {
         defer realtimeMod.Close()
         log.Info("realtime module wired")
 
+        // Notifications module (push/SMS/email).
+        notificationsMod := notifications.New(cfg, dbPool.Pool(), log)
+        defer notificationsMod.Close()
+        log.Info("notifications module wired")
+
         // 5b. Connect to Redis bus for the realtime subscriber (consumes events
         // from orders/dispatch/financial and broadcasts to WebSocket clients).
         redisBus, err := bus.NewRedisBus(ctx, cfg.Redis, log)
@@ -123,7 +136,7 @@ func main() {
                 os.Exit(1)
         }
         defer redisBus.Close()
-        log.Info("redis bus connected (realtime subscriber)")
+        log.Info("redis bus connected (realtime + notifications subscriber)")
 
         // 5c. Start the realtime event subscriber.
         realtimeInbox := realtimeMod.NewInbox()
@@ -134,6 +147,15 @@ func main() {
         }
         log.Info("realtime subscriber started")
 
+        // 5d. Start the notifications event subscriber.
+        notifInbox := notificationsMod.NewInbox()
+        notifSub := notifjobs.NewSubscriber(notificationsMod.Service(), redisBus, notifInbox, log)
+        if err := notifSub.Start(ctx); err != nil {
+                log.Error("notifications subscriber start failed", "error", err)
+                os.Exit(1)
+        }
+        log.Info("notifications subscriber started")
+
         // 6. Setup HTTP server.
         mux := http.NewServeMux()
         identityMod.RegisterRoutes(mux, cfg)
@@ -142,6 +164,7 @@ func main() {
         financialMod.RegisterRoutes(mux, identityMod.JWTIssuer())
         dispatchMod.RegisterRoutes(mux, identityMod.JWTIssuer())
         realtimeMod.RegisterRoutes(mux, identityMod.JWTIssuer())
+        notificationsMod.RegisterRoutes(mux, identityMod.JWTIssuer())
 
         handler := httptransport.RequestID(mux)
         handler = httptransport.Logging(log)(handler)
