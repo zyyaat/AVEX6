@@ -10,3 +10,9 @@ import "embed"
 //
 //go:embed identity
 var IdentityMigrations embed.FS
+
+// OrdersMigrations embeds all SQL files under migrations/orders/.
+// Used by the database migrator to run orders schema migrations.
+//
+//go:embed orders
+var OrdersMigrations embed.FS

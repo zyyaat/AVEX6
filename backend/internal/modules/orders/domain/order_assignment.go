@@ -218,6 +218,16 @@ func (a *OrderAssignment) Cancel(now time.Time) error {
 
 // ===== String =====
 
+// ===== Pointer accessors (for DB mapping) =====
+
+// DistanceMPtr returns *int for SQL binding, nil if unset.
+func (a OrderAssignment) DistanceMPtr() *int {
+	if a.distanceM == nil {
+		return nil
+	}
+	return a.distanceM
+}
+
 func (a OrderAssignment) String() string {
 	return fmt.Sprintf("OrderAssignment{id=%s, order=%s, driver=%s, status=%s, attempt=%d}",
 		a.id, a.orderID, a.driverID, a.status, a.attemptNumber)

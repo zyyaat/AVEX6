@@ -1,11 +1,11 @@
 // Package main is a migration runner for the AVEX backend.
-// It runs identity migrations against the DATABASE_URL from the environment.
+// It runs migrations for all modules against the DATABASE_URL from the environment.
 //
 // Usage:
 //
 //	DATABASE_URL=postgres://... go run ./cmd/migrate up
-//	DATABASE_URL=postgres://... go run ./cmd/migrate down
-//	DATABASE_URL=postgres://... go run ./cmd/migrate version
+//	DATABASE_URL=postgres://... go run ./cmd/migrate down [module]
+//	DATABASE_URL=postgres://... go run ./cmd/migrate version [module]
 package main
 
 import (
@@ -18,9 +18,19 @@ import (
 	migrations "avex-backend/migrations"
 )
 
+// moduleMigration holds an embed.FS + dir + module name for each module.
+type moduleMigration struct {
+	fs      interface{ Name() string }
+	dir     string
+	name    string
+	runUp   func(ctx interface{}, dsn string) error
+	runDown func(ctx interface{}, dsn string) error
+	version func(ctx interface{}, dsn string) (int64, error)
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|version>")
+		fmt.Fprintln(os.Stderr, "usage: migrate <up|down [module]|version [module]>")
 		os.Exit(1)
 	}
 
@@ -35,29 +45,67 @@ func main() {
 
 	switch os.Args[1] {
 	case "up":
-		if err := database.RunUp(ctx, dsn, migrations.IdentityMigrations, "identity"); err != nil {
-			fmt.Fprintf(os.Stderr, "migrate up failed: %v\n", err)
+		// Run all modules in dependency order.
+		if err := database.RunUp(ctx, dsn, migrations.IdentityMigrations, "identity", "identity"); err != nil {
+			fmt.Fprintf(os.Stderr, "identity migrate up failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("migrations applied")
+		fmt.Println("identity migrations applied")
+
+		if err := database.RunUp(ctx, dsn, migrations.OrdersMigrations, "orders", "orders"); err != nil {
+			fmt.Fprintf(os.Stderr, "orders migrate up failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("orders migrations applied")
+		fmt.Println("all migrations complete")
 
 	case "down":
-		if err := database.RunDown(ctx, dsn, migrations.IdentityMigrations, "identity"); err != nil {
-			fmt.Fprintf(os.Stderr, "migrate down failed: %v\n", err)
+		module := "identity"
+		if len(os.Args) > 2 {
+			module = os.Args[2]
+		}
+		if err := runDown(ctx, dsn, module); err != nil {
+			fmt.Fprintf(os.Stderr, "%s migrate down failed: %v\n", module, err)
 			os.Exit(1)
 		}
-		fmt.Println("last migration rolled back")
+		fmt.Printf("%s last migration rolled back\n", module)
 
 	case "version":
-		v, err := database.Version(ctx, dsn, migrations.IdentityMigrations, "identity")
+		module := "identity"
+		if len(os.Args) > 2 {
+			module = os.Args[2]
+		}
+		v, err := runVersion(ctx, dsn, module)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "get version failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "%s get version failed: %v\n", module, err)
 			os.Exit(1)
 		}
-		fmt.Printf("current version: %d\n", v)
+		fmt.Printf("%s current version: %d\n", module, v)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		os.Exit(1)
+	}
+}
+
+func runDown(ctx context.Context, dsn, module string) error {
+	switch module {
+	case "identity":
+		return database.RunDown(ctx, dsn, migrations.IdentityMigrations, "identity", "identity")
+	case "orders":
+		return database.RunDown(ctx, dsn, migrations.OrdersMigrations, "orders", "orders")
+	default:
+		return fmt.Errorf("unknown module: %s", module)
+	}
+}
+
+func runVersion(ctx context.Context, dsn, module string) (int64, error) {
+	switch module {
+	case "identity":
+		return database.Version(ctx, dsn, migrations.IdentityMigrations, "identity", "identity")
+	case "orders":
+		return database.Version(ctx, dsn, migrations.OrdersMigrations, "orders", "orders")
+	default:
+		return 0, fmt.Errorf("unknown module: %s", module)
 	}
 }

@@ -1,18 +1,4 @@
 // Package main is the HTTP API server entry point.
-//
-// It bootstraps the entire application:
-//  1. Load configuration from environment.
-//  2. Initialize the structured logger.
-//  3. Connect to PostgreSQL and run migrations.
-//  4. Wire the identity module (composition root).
-//  5. Register HTTP routes with platform middleware.
-//  6. Start the HTTP server with graceful shutdown.
-//
-// Graceful shutdown:
-//   - Listens for SIGINT / SIGTERM.
-//   - On signal, stops accepting new requests.
-//   - Waits up to 30 seconds for in-flight requests to complete.
-//   - Closes the DB pool.
 package main
 
 import (
@@ -27,7 +13,7 @@ import (
 
 	"avex-backend/internal/modules/identity"
 	httptransport "avex-backend/internal/modules/identity/transport/http"
-	"avex-backend/internal/platform/bus"
+	"avex-backend/internal/modules/orders"
 	"avex-backend/internal/platform/config"
 	"avex-backend/internal/platform/database"
 	"avex-backend/internal/platform/logger"
@@ -46,13 +32,7 @@ func main() {
 
 	// 2. Init logger.
 	log := logger.New(cfg)
-
-	log.Info("starting server",
-		"app", cfg.App.Name,
-		"env", cfg.App.Env,
-		"instance", cfg.App.InstanceID,
-		"port", cfg.App.Port,
-	)
+	log.Info("starting server", "app", cfg.App.Name, "env", cfg.App.Env, "port", cfg.App.Port)
 
 	// 3. Connect to database.
 	dbPool, err := database.Connect(ctx, cfg.Database)
@@ -63,25 +43,33 @@ func main() {
 	defer dbPool.Close()
 	log.Info("database connected")
 
-	// 4. Run migrations.
-	if err := database.RunUp(ctx, cfg.Database.URL, migrations.IdentityMigrations, "identity"); err != nil {
-		log.Error("migrations failed", "error", err)
+	// 4. Run migrations — each module has its own goose version table.
+	if err := database.RunUp(ctx, cfg.Database.URL, migrations.IdentityMigrations, "identity", "identity"); err != nil {
+		log.Error("identity migrations failed", "error", err)
 		os.Exit(1)
 	}
-	log.Info("migrations complete")
+	log.Info("identity migrations complete")
 
-	// 5. Wire identity module.
+	if err := database.RunUp(ctx, cfg.Database.URL, migrations.OrdersMigrations, "orders", "orders"); err != nil {
+		log.Error("orders migrations failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("orders migrations complete")
+
+	// 5. Wire modules.
 	identityMod := identity.New(cfg, dbPool.Pool(), log)
 	defer identityMod.Close()
 	log.Info("identity module wired")
 
+	ordersMod := orders.New(cfg, dbPool.Pool(), log)
+	defer ordersMod.Close()
+	log.Info("orders module wired")
+
 	// 6. Setup HTTP server.
 	mux := http.NewServeMux()
-
-	// Register identity routes.
 	identityMod.RegisterRoutes(mux, cfg)
+	ordersMod.RegisterRoutes(mux)
 
-	// Apply platform middleware (outermost to innermost).
 	handler := httptransport.RequestID(mux)
 	handler = httptransport.Logging(log)(handler)
 	handler = httptransport.Recovery(log)(handler)
@@ -95,7 +83,7 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 7. Start server in a goroutine.
+	// 7. Start server.
 	go func() {
 		log.Info("http server listening", "addr", server.Addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -110,18 +98,11 @@ func main() {
 	sig := <-quit
 	log.Info("shutdown signal received", "signal", sig)
 
-	// 9. Graceful shutdown with 30s timeout.
+	// 9. Graceful shutdown.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("server shutdown error", "error", err)
 	}
-
-	// Note: bus is not used in this Phase 6 server — it's used by the
-	// outbox worker. We reference it here to avoid an unused import
-	// warning; the actual bus initialization will be in cmd/worker.
-	_ = bus.EventEnvelope{}
-
 	log.Info("server stopped gracefully")
 }

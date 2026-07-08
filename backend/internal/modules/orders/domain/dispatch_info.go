@@ -85,3 +85,59 @@ func (d DispatchInfo) IsZero() bool {
 	return d.driverID == nil && d.zoneID == "" && d.dispatchDistance == nil &&
 		d.deliveryDistance == nil && d.pickupPhotoURL == nil && d.deliveryPhotoURL == nil
 }
+
+// ===== Reconstruction =====
+
+// DispatchInfoRecord holds all fields to rebuild a DispatchInfo from persistence.
+type DispatchInfoRecord struct {
+	DriverID         *string
+	ZoneID           string
+	DispatchDistance *int
+	DeliveryDistance *int
+	PickupPhotoURL   *string
+	DeliveryPhotoURL *string
+}
+
+// ReconstructDispatchInfo rebuilds a DispatchInfo from persistence (no validation).
+func ReconstructDispatchInfo(rec DispatchInfoRecord) DispatchInfo {
+	return DispatchInfo{
+		driverID:         rec.DriverID,
+		zoneID:           rec.ZoneID,
+		dispatchDistance: rec.DispatchDistance,
+		deliveryDistance: rec.DeliveryDistance,
+		pickupPhotoURL:   rec.PickupPhotoURL,
+		deliveryPhotoURL: rec.DeliveryPhotoURL,
+	}
+}
+
+// ===== Pointer accessors (for DB mapping) =====
+// These return *int / *string directly for SQL parameter binding.
+// Returns nil if the field is unset (so SQL inserts NULL).
+
+func (d DispatchInfo) DispatchDistancePtr() *int {
+	if d.dispatchDistance == nil || *d.dispatchDistance == 0 {
+		return nil
+	}
+	return d.dispatchDistance
+}
+
+func (d DispatchInfo) DeliveryDistancePtr() *int {
+	if d.deliveryDistance == nil || *d.deliveryDistance == 0 {
+		return nil
+	}
+	return d.deliveryDistance
+}
+
+func (d DispatchInfo) PickupPhotoURLPtr() *string {
+	if d.pickupPhotoURL == nil || *d.pickupPhotoURL == "" {
+		return nil
+	}
+	return d.pickupPhotoURL
+}
+
+func (d DispatchInfo) DeliveryPhotoURLPtr() *string {
+	if d.deliveryPhotoURL == nil || *d.deliveryPhotoURL == "" {
+		return nil
+	}
+	return d.deliveryPhotoURL
+}
