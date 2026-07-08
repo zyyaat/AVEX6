@@ -1,0 +1,99 @@
+# ============================================================================
+# golangci-lint configuration — AVEX Backend
+# Enforces clean architecture + module boundary rules
+# ============================================================================
+
+run:
+  timeout: 5m
+  go: "1.25"
+  modules-download-mode: readonly
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true
+
+linters:
+  enable:
+    - errcheck          # unchecked errors
+    - govet             # go vet
+    - ineffassign       # ineffectual assignments
+    - staticcheck       # comprehensive checks
+    - unused            # find unused code
+    - gofmt             # formatting
+    - goimports         # import ordering
+    - misspell          # spelling
+    - revive            # golint replacement
+    - gocritic          # opinionated checks
+    - bodyclose         # http response bodies must be closed
+    - rowserrcheck      # sql.Rows.Err must be checked
+    - sqlclosecheck     # sql.Rows/Stmt must be closed
+    - noctx             # http requests should use context
+    - nilerr            # don't return nil when err is not nil
+    - nilnil            # don't return both nil
+    - prealloc          # slice preallocation
+    - exportloopref     # don't export loop variables
+    - gocyclo           # cyclomatic complexity
+    - dupl              # duplicate code detection
+    - goconst           # repeated string literals → constants
+    - unconvert         # unnecessary type conversions
+    - predeclared       # don't shadow predeclared identifiers
+    - thelper           # test helpers must start with t.Helper()
+    - tparallel         # parallel subtests
+    - wastedassign      # wasted assignments
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+  revive:
+    severity: warning
+    rules:
+      - name: exported
+        disabled: true  # too noisy for internal packages
+      - name: var-naming
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: increment-decrement
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      - hugeParam      # too noisy for domain structs
+      - rangeValCopy   # too noisy
+
+issues:
+  exclude-rules:
+    # Test files: allow some leniency
+    - path: _test\.go
+      linters:
+        - dupl
+        - gocyclo
+        - goconst
+        - errcheck
+    # Domain errors file: allow unused errors (they're part of the API)
+    - path: internal/modules/identity/domain/errors\.go
+      linters:
+        - unused
+    # cmd/*: allow direct config usage
+    - path: cmd/
+      linters:
+        - gocritic
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  fix: false

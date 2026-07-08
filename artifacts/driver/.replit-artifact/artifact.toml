@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/driver/"
+title = "Driver App"
+version = "1.0.0"
+id = "artifacts/driver"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/driver/" ]
+localPort = 19574
+
+[services.development]
+run = "pnpm --filter @workspace/driver run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/driver", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/driver/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19574"
+BASE_PATH = "/driver/"

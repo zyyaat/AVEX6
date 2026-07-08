@@ -1,0 +1,12 @@
+// Package migrations embeds SQL migration files for all modules.
+// Each module's migrations are exposed as a separate embed.FS variable
+// so that the migrator can run them independently.
+package migrations
+
+import "embed"
+
+// IdentityMigrations embeds all SQL files under migrations/identity/.
+// Used by the database migrator to run identity schema migrations.
+//
+//go:embed identity
+var IdentityMigrations embed.FS

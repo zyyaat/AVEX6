@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/merchant/"
+title = "Merchant App"
+version = "1.0.0"
+id = "artifacts/merchant"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/merchant/" ]
+localPort = 23719
+
+[services.development]
+run = "pnpm --filter @workspace/merchant run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/merchant", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/merchant/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23719"
+BASE_PATH = "/merchant/"

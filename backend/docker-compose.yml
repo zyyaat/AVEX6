@@ -1,0 +1,59 @@
+# =============================================================================
+# AVEX Backend — Infrastructure Docker Compose
+# =============================================================================
+# This file provisions ONLY the infrastructure (PostgreSQL + Redis) for local
+# development and testing. The application itself (cmd/server, cmd/worker)
+# runs on the host machine, not in Docker.
+#
+# Usage:
+#   docker compose up -d          # start infrastructure
+#   docker compose down           # stop infrastructure
+#   docker compose down -v        # stop + delete data volumes
+#
+# The application connects via:
+#   DATABASE_URL=postgres://avex:avex@localhost:5432/avex_dev?sslmode=disable
+#   REDIS_URL=redis://localhost:6379/0
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: avex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: avex
+      POSTGRES_PASSWORD: avex
+      POSTGRES_DB: avex_dev
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5432:5432"
+    volumes:
+      - avex_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avex -d avex_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: avex-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - avex_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  avex_pgdata:
+    driver: local
+  avex_redisdata:
+    driver: local

@@ -1,0 +1,4 @@
+- [Next.js→Vite navigation shim](next-to-vite-nav-shim.md) — shim must prepend BASE_URL and return URLSearchParams directly (not tuple)
+- [Wouter base path routing](wouter-base-path.md) — use WouterRouter base=BASE_URL.replace(/\/$/, '') and toFullPath() in all history calls
+- [Express 5 wildcard routes](express5-wildcard.md) — use /{*path} not * for catch-all routes (path-to-regexp v8 breaking change)
+- [AVEX Go backend setup](avex-go-backend.md) — api-server artifact shells out to Go (not Node.js); health path is /api/health
