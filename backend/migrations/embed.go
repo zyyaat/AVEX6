@@ -61,3 +61,8 @@ var SettingsMigrations embed.FS
 //
 //go:embed audit
 var AuditMigrations embed.FS
+
+// LocalizationMigrations embeds all SQL files under migrations/localization/.
+//
+//go:embed localization
+var LocalizationMigrations embed.FS

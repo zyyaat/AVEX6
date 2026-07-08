@@ -18,6 +18,7 @@ import (
         "avex-backend/internal/modules/financial"
         "avex-backend/internal/modules/identity"
         httptransport "avex-backend/internal/modules/identity/transport/http"
+        "avex-backend/internal/modules/localization"
         "avex-backend/internal/modules/notifications"
         notifjobs "avex-backend/internal/modules/notifications/jobs"
         "avex-backend/internal/modules/orders"
@@ -126,6 +127,12 @@ func main() {
         }
         log.Info("audit migrations complete")
 
+        if err := database.RunUp(ctx, cfg.Database.URL, migrations.LocalizationMigrations, "localization", "localization"); err != nil {
+                log.Error("localization migrations failed", "error", err)
+                os.Exit(1)
+        }
+        log.Info("localization migrations complete")
+
         // 5. Wire modules.
         identityMod := identity.New(cfg, dbPool.Pool(), log)
         defer identityMod.Close()
@@ -189,6 +196,11 @@ func main() {
         defer systemMod.Close()
         log.Info("system module wired")
 
+        // Localization module (multi-language translations).
+        localizationMod := localization.New(cfg, dbPool.Pool(), log)
+        defer localizationMod.Close()
+        log.Info("localization module wired")
+
         // 5b. Connect to Redis bus for the realtime subscriber (consumes events
         // from orders/dispatch/financial and broadcasts to WebSocket clients).
         redisBus, err := bus.NewRedisBus(ctx, cfg.Redis, log)
@@ -240,6 +252,7 @@ func main() {
         settingsMod.RegisterRoutes(mux, identityMod.JWTIssuer())
         auditMod.RegisterRoutes(mux, identityMod.JWTIssuer())
         systemMod.RegisterRoutes(mux)
+        localizationMod.RegisterRoutes(mux, identityMod.JWTIssuer())
 
         handler := httptransport.RequestID(mux)
         handler = httptransport.Logging(log)(handler)
